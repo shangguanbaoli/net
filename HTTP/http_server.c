@@ -235,18 +235,18 @@ int IsDir(const char* file_path)
         // 此处是目录
         return 1;
     }
-    return 0；
+    return 0;
 }
 
 // 
-void HandlerFilePath(const char* url_path, char file_path)
+void HandlerFilePath(const char* url_path, char file_path[])
 {
   // url_path 是以 / 开头的，所以不需要 wwwroot 之后显式指明 /
   sprintf(file_path, "./wwwroot%s", url_path);
   // 如果 url_path 指向的是目录，就在目录后面拼接上 index.html 
   // 作为默认访问的文件
   // 如何识别 url_path 指向的文件到底是普通文件还是目录呢？
-  if(file_path[strlen(file_path)]-1 == '/')
+  if(file_path[strlen(file_path)-1] == '/')
   {
       // a) url_path 以 / 结尾，例如：/image/ ，就一定是目录
       strcat(file_path, "index.html");
@@ -313,7 +313,7 @@ int HandlerStaticFile(int new_sock, const HttpRequest* req)
   // 在 url 中写 path 就叫做 /image/cat.jpg
   char file_path[SIZE]={0};
   // 根据下面的函数把 /image/101.jpg 转换成了磁盘上的 ./wwwroot/image/cat.jpg
-  HandlerFilePath(req->url_path, file_path);
+  HandlerFilePath(req->url, file_path);
   // 2. 打开文件，把文件中的内容读取出来，并写入 socket 中。
   int err_code=WriteStaticFile(new_sock, file_path);
   return err_code;
@@ -368,20 +368,23 @@ void HandlerRequest(int new_sock)
   }
   // 2.根据请求的详细情况执行静态页面逻辑还是动态页面逻辑
   //   a) 如果是 GET 请求，并且没有 query_string，就认为是静态页面。
-  if(strcmp(req.method, "GET")==0 && req.query_string == NULL)
+  // Get, geT, gET 
+  if(strcasecmp(req.method, "GET")==0 && req.query_string == NULL)
   {
+    // 处理静态页面
     err_code=HandlerStaticFile(new_sock, &req);
-
   }
   //   b) 如果是 GET 请求，并且有 query_string, 就可以根据 query_string
   //      参数的内容来动态计算生成页面了。
-  else if(strcmp(req.method, "GET")==0 && req.query_string != NULL)
+  else if(strcasecmp(req.method, "GET")==0 && req.query_string != NULL)
   {
+    // 处理动态页面
     err_code=HandlerCGI();
   }
   //   c) 如果是 POST 请求，(一般没有query_string),都认为是动态页面。
-  else if(strcmp(req.method, "POST")==0)
+  else if(strcasecmp(req.method, "POST")==0)
   {
+    // 处理动态页面
     err_code=HandlerCGI();
   }
   //   d) 既不是GET也不是POST
