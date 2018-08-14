@@ -3,9 +3,12 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/stat.h>
+#include <sys/sendfile.h>
 
 typedef struct sockaddr sockaddr;
 typedef struct sockaddr_in sockaddr_in;
@@ -217,9 +220,103 @@ int Handler404(int new_sock)
   return 0;
 }
 
-int HandlerStaticFile()
+// 判断是否是目录
+int IsDir(const char* file_path)
 {
-  return 404;
+    struct stat st;
+    int ret=stat(file_path, &st);
+    if(ret < 0)
+    {
+        // 此处不是目录
+        return 0;
+    }
+    if(S_ISDIR(st.st_mode))
+    {
+        // 此处是目录
+        return 1;
+    }
+    return 0；
+}
+
+// 
+void HandlerFilePath(const char* url_path, char file_path)
+{
+  // url_path 是以 / 开头的，所以不需要 wwwroot 之后显式指明 /
+  sprintf(file_path, "./wwwroot%s", url_path);
+  // 如果 url_path 指向的是目录，就在目录后面拼接上 index.html 
+  // 作为默认访问的文件
+  // 如何识别 url_path 指向的文件到底是普通文件还是目录呢？
+  if(file_path[strlen(file_path)]-1 == '/')
+  {
+      // a) url_path 以 / 结尾，例如：/image/ ，就一定是目录
+      strcat(file_path, "index.html");
+  }
+  else
+  {
+      // b) url_path 没有以 / 结尾，此时需要根据文件属性来判定是否是目录
+      if(IsDir(file_path))
+      {
+          strcat(file_path, "/index.html");
+      }
+  }
+}
+
+ssize_t GetFileSize(const char* file_path)
+{
+    struct stat st;
+    int ret = stat(file_path, &st);
+    if(ret < 0)
+    {
+        return 0;
+    }
+    return st.st_size;
+}
+
+// 
+int WriteStaticFile(int new_sock, const char* file_path)
+{
+  // 1. 打开文件。如果打开失败，就返回 404。
+  int fd=open(file_path, O_RDONLY);
+  if(fd < 0)
+  {
+      perror("open");
+      return 404;
+  }
+  // 2. 构造 http 响应报文。
+  const char* first_line = "HTTP/1.1 200 OK\n";
+  send(new_sock, first_line, strlen(first_line), 0);
+  // 此处如果从一个更严谨的角度考虑，最好还要加上一些 header
+  // 此处我们没有写 Content-Length 是因为后面立即关闭了 socket ,
+  // 浏览器就能识别出数据应该读到哪里结束。
+  const char* blank_line = "\n";
+  send(new_sock, blank_line, strlen(blank_line), 0);
+  // 3. 读文件内容并且写到 socket 之中。
+  // 此处我们采用更高效的 sendfile 来完成文件的传输操作。
+  //char c='\0';
+  //while(read(new_sock, &c, 1) > 0)
+  //{
+  //    send(new_sock, &c, 1, 0);
+  //}
+  ssize_t file_size=GetFileSize(file_path);
+  sendfile(new_sock, fd, NULL, file_size);
+  // 4. 关闭文件
+  close(fd);
+  return 200;
+}
+
+// 处理静态文件
+int HandlerStaticFile(int new_sock, const HttpRequest* req)
+{
+  // 1. 根据上面解析出的 url_path, 获取到对应的真实文件路径
+  // 例如，此时 HTTP 服务器的根目录叫做 ./wwwroot
+  // 此时有一个文件 ./wwwroot/image/cat.jpg
+  // 在 url 中写 path 就叫做 /image/cat.jpg
+  char file_path[SIZE]={0};
+  // 根据下面的函数把 /image/101.jpg 转换成了磁盘上的 ./wwwroot/image/cat.jpg
+  HandlerFilePath(req->url_path, file_path);
+  // 2. 打开文件，把文件中的内容读取出来，并写入 socket 中。
+  int err_code=WriteStaticFile(new_sock, file_path);
+  return err_code;
 }
 
 int HandlerCGI()
@@ -273,7 +370,7 @@ void HandlerRequest(int new_sock)
   //   a) 如果是 GET 请求，并且没有 query_string，就认为是静态页面。
   if(strcmp(req.method, "GET")==0 && req.query_string == NULL)
   {
-    err_code=HandlerStaticFile();
+    err_code=HandlerStaticFile(new_sock, &req);
 
   }
   //   b) 如果是 GET 请求，并且有 query_string, 就可以根据 query_string
